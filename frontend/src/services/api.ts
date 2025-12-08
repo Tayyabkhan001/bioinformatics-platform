@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'https://kqtg3kkrdf.execute-api.me-south-1.amazonaws.com/prod';
+const API_BASE_URL = 'https://bs1gcg6hs0.execute-api.me-south-1.amazonaws.com/prod';
 
 console.log('🔗 API Base URL:', API_BASE_URL);
 

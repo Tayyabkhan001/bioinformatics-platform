@@ -1,1 +1,0 @@
-{"httpMethod":"POST","path":"/upload","body":"{\"fileName\":\"test.fasta\",\"fileContent\":\"dGVzdA==\",\"analysisType\":\"blast\",\"userId\":\"test-user\"}"}

@@ -5,21 +5,39 @@ from datetime import datetime
 import base64
 import os
 
-print("🚀 Lambda function started (API GATEWAY COMPATIBLE)")
+print("🚀 Lambda function started (PRODUCTION READY)")
 
 # ✅ Set AWS region globally to avoid conflicts
 os.environ['AWS_DEFAULT_REGION'] = 'me-south-1'
 
+# ✅ PRODUCTION: Allowed origins for CORS
+ALLOWED_ORIGINS = [
+    "https://bioinformatics-platform.vercel.app",  # Primary domain
+    "https://bioinformatics-platf-git-0bdd0c-tayyab-ur-rahman-khans-projects.vercel.app",  # Preview domain
+    "https://bioinformatics-platform-j9x4r467s.vercel.app",  # Another preview domain
+    "http://localhost:3000"  # Local development
+]
+
 
 def lambda_handler(event, context):
     """
-    Handles API Gateway requests
+    Handles API Gateway requests - PRODUCTION VERSION
     """
     print("📨 Received event from API Gateway")
 
-    # ✅ FIXED: Define base headers for ALL responses
+    # ✅ FIXED: Dynamic CORS headers based on origin
+    origin = event.get('headers', {}).get('origin', '') or event.get('headers', {}).get('Origin', '')
+
+    # Determine allowed origin
+    allowed_origin = "*"  # Default wildcard
+    if origin in ALLOWED_ORIGINS:
+        allowed_origin = origin
+    elif origin and origin.startswith("https://bioinformatics-platform") and origin.endswith(".vercel.app"):
+        # Allow any vercel subdomain
+        allowed_origin = origin
+
     base_headers = {
-        'Access-Control-Allow-Origin': 'http://localhost:3000',
+        'Access-Control-Allow-Origin': allowed_origin,
         'Access-Control-Allow-Methods': 'POST, GET, OPTIONS, PUT, DELETE',
         'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,Origin',
         'Access-Control-Allow-Credentials': 'true',
@@ -39,17 +57,15 @@ def lambda_handler(event, context):
         http_method = event.get('httpMethod')
         path = event.get('path', '')
         query_params = event.get('queryStringParameters', {}) or {}
+        raw_path = event.get('rawPath', '')  # Use rawPath for better routing
 
-        print(f"🔍 Method: {http_method}, Path: '{path}', Query: {query_params}")
-        print(f"🔍 Full event keys: {event.keys()}")
+        print(f"🔍 Method: {http_method}, Path: '{path}', Raw Path: '{raw_path}', Query: {query_params}")
 
-        # ✅ FIXED: Ensure path is a string
-        if path is None:
-            path = ''
+        # ✅ FIXED: Use rawPath for better routing
+        route_path = raw_path or path
 
-        # ✅ FIXED: Handle paths with stage prefix
-        # Remove stage prefix if present
-        clean_path = str(path)
+        # ✅ FIXED: Remove stage prefix if present
+        clean_path = str(route_path)
         if clean_path.startswith('/prod/'):
             clean_path = clean_path[5:]  # Remove '/prod'
 
@@ -57,10 +73,10 @@ def lambda_handler(event, context):
 
         # ✅ FIXED: Route requests - SIMPLIFIED VERSION
         if http_method == 'POST':
-            if 'fetch-ncbi' in clean_path:
+            if clean_path == '/fetch-ncbi' or 'fetch-ncbi' in clean_path:
                 print("🎯 Routing to /fetch-ncbi handler")
                 return handle_fetch_ncbi(event, base_headers)
-            elif 'upload' in clean_path:
+            elif clean_path == '/upload' or 'upload' in clean_path:
                 print("🎯 Routing to /upload handler")
                 return handle_upload(event, base_headers)
 
@@ -71,17 +87,31 @@ def lambda_handler(event, context):
                 return handle_debug_s3(query_params, base_headers)
             elif 'debug-files' in clean_path:
                 return handle_debug_files(query_params, base_headers)
-            elif 'jobs/' in clean_path:
+            elif 'jobs' in clean_path:
                 # Extract job ID from path
                 parts = clean_path.split('/')
-                job_id = parts[-1] if parts else 'unknown'
-                return handle_get_job(job_id, base_headers)
+                if len(parts) > 1:
+                    job_id = parts[-1]
+                    if job_id and job_id != 'jobs':
+                        return handle_get_job(job_id, base_headers)
+
+            # ✅ ADDED: Health check endpoint
+            if clean_path == '/health' or clean_path == '/':
+                return {
+                    'statusCode': 200,
+                    'headers': base_headers,
+                    'body': json.dumps({
+                        'status': 'healthy',
+                        'service': 'Bioinformatics Platform API',
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                }
 
         print(f"❌ No route matched for {http_method} '{clean_path}'")
         return {
             'statusCode': 404,
             'headers': base_headers,
-            'body': json.dumps({'error': 'Endpoint not found'})
+            'body': json.dumps({'error': 'Endpoint not found', 'path': clean_path})
         }
 
     except Exception as e:
@@ -94,8 +124,9 @@ def lambda_handler(event, context):
             'body': json.dumps({'error': f'Internal server error: {str(e)}'})
         }
 
+
 def handle_upload(event, base_headers):
-    """Handle file upload - FIXED VERSION"""
+    """Handle file upload - PRODUCTION VERSION"""
     try:
         print("📤 Handling upload request")
 
@@ -111,13 +142,20 @@ def handle_upload(event, base_headers):
         analysis_type = body.get('analysisType', 'fastqc')
         user_id = body.get('userId', 'test-user')
 
+        # ✅ ADDED: Validation for production
+        if not file_name or not file_content:
+            return {
+                'statusCode': 400,
+                'headers': base_headers,
+                'body': json.dumps({'error': 'Missing required fields: fileName or fileContent'})
+            }
+
         print(f"📄 Processing: {file_name}, Type: {analysis_type}")
 
         # Generate unique job ID
         job_id = str(uuid.uuid4())
 
         # Initialize AWS clients
-        # ✅ FIXED: Specify region for S3 client
         s3 = boto3.client('s3', region_name='me-south-1')
         dynamodb = boto3.resource('dynamodb')
         batch = boto3.client('batch')
@@ -128,7 +166,23 @@ def handle_upload(event, base_headers):
         s3_key = f"uploads/{user_id}/{job_id}/{file_name}"
 
         print(f"📤 Uploading to S3: {s3_key}")
-        file_bytes = base64.b64decode(file_content)
+
+        try:
+            file_bytes = base64.b64decode(file_content)
+        except Exception as e:
+            return {
+                'statusCode': 400,
+                'headers': base_headers,
+                'body': json.dumps({'error': f'Invalid file content (not valid base64): {str(e)}'})
+            }
+
+        if len(file_bytes) == 0:
+            return {
+                'statusCode': 400,
+                'headers': base_headers,
+                'body': json.dumps({'error': 'File content is empty'})
+            }
+
         s3.put_object(
             Bucket=uploads_bucket,
             Key=s3_key,
@@ -155,7 +209,7 @@ def handle_upload(event, base_headers):
             if analysis_type.lower() == 'fastqc':
                 job_definition = 'fastqc-fargate-fixed-v2'
 
-                # 🎯 WORKING: FastQC command (no changes)
+                # 🎯 WORKING: FastQC command
                 command = [
                     "sh", "-c",
                     f"""
@@ -240,7 +294,7 @@ Generated files:
 - input_sequence.fasta (original input)
 EOF
 
-                    # CRITICAL: Upload all files with error handling
+                    # Upload files
                     echo "Uploading files to S3..."
                     aws s3 cp /tmp/blast_results.txt s3://{results_bucket}/{job_id}/blast_results.txt --region me-south-1
                     aws s3 cp /tmp/blast_report.txt s3://{results_bucket}/{job_id}/blast_report.txt --region me-south-1
@@ -313,7 +367,7 @@ EOF
             'status': 'PROCESSING',
             'message': f'{analysis_type} analysis submitted',
             's3Key': s3_key,
-            'batchJobId': batch_response['jobId'],
+            'batchJobId': batch_response.get('jobId', ''),
             'timestamp': datetime.utcnow().isoformat()
         }
 
@@ -335,7 +389,7 @@ EOF
 
 
 def handle_fetch_ncbi(event, base_headers):
-    """Handle NCBI fetch requests - NEW ENDPOINT"""
+    """Handle NCBI fetch requests - PRODUCTION VERSION with restrictions"""
     try:
         print("🧬 Handling NCBI fetch request")
 
@@ -357,6 +411,17 @@ def handle_fetch_ncbi(event, base_headers):
                 'body': json.dumps({'error': 'Accession ID is required'})
             }
 
+        # ✅ ADDED: Restrict NCBI to BLAST only for production
+        if analysis_type.lower() != 'blast':
+            return {
+                'statusCode': 400,
+                'headers': base_headers,
+                'body': json.dumps({
+                    'error': 'NCBI fetch only supports BLAST analysis. FastQC requires FASTQ format which is not available from NCBI.',
+                    'suggestion': 'Upload a FASTQ file directly for FastQC analysis.'
+                })
+            }
+
         print(f"🧬 Fetching from NCBI: {accession_id}, Analysis: {analysis_type}")
 
         # Generate unique job ID
@@ -368,14 +433,15 @@ def handle_fetch_ncbi(event, base_headers):
         dynamodb = boto3.resource('dynamodb')
         batch = boto3.client('batch')
 
-        # Step 1: Fetch sequence from NCBI (simulated for now)
-        print(f"🔍 Fetching sequence for: {accession_id}")
+        # Step 1: Create a mock FASTA file for testing
+        # ✅ TODO: In production, replace with actual NCBI API call
+        print(f"🔍 Fetching sequence for: {accession_id} (MOCK FOR NOW)")
 
-        # Create a mock FASTA file for testing
-        mock_sequence = f""">{accession_id}_fetched_from_NCBI
+        mock_sequence = f""">{accession_id}_fetched_from_NCBI_MOCK
 ATGCGTACGTAGCTAGCTAGCTAGCGTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC
 TAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCT
-AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA"""
+AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA
+ATGCGTACGTAGCTAGCTAGCTAGCGTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG"""
 
         # Save to S3
         uploads_bucket = 'bioinformatics-platform-uploads-1761318731'
@@ -396,7 +462,7 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA"""
             'jobId': job_id,
             'userId': user_id,
             'fileName': file_name,
-            'analysisType': analysis_type,
+            'analysisType': 'blast',  # Force BLAST for NCBI
             's3Key': s3_key,
             'accessionId': accession_id,
             'status': 'SUBMITTED',
@@ -405,39 +471,62 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA"""
         }
         table.put_item(Item=job_item)
 
-        # Submit to AWS Batch (same as regular analysis)
+        # Submit to AWS Batch
         try:
-            if analysis_type.lower() == 'fastqc':
-                job_definition = 'fastqc-fargate-fixed-v2'
-                command = [
-                    "sh", "-c",
-                    f"""
-                    echo "=== PROCESSING NCBI FETCHED SEQUENCE (FASTQC) ==="
-                    aws s3 cp s3://{uploads_bucket}/{s3_key} /tmp/input.fastq --region me-south-1
-                    fastqc --extract -o /tmp /tmp/input.fastq
-                    aws s3 cp /tmp/input_fastqc.html s3://{results_bucket}/{job_id}/input_fastqc.html --region me-south-1
-                    aws s3 cp /tmp/input_fastqc.zip s3://{results_bucket}/{job_id}/input_fastqc.zip --region me-south-1
-                    echo "=== FASTQC COMPLETED ==="
-                    """
-                ]
-            else:  # blast
-                job_definition = 'blast-fargate-fixed-v2'
-                command = [
-                    "sh", "-c",
-                    f"""
-                    echo "=== PROCESSING NCBI FETCHED SEQUENCE (BLAST) ==="
-                    aws s3 cp s3://{uploads_bucket}/{s3_key} /tmp/input.fasta --region me-south-1
-                    makeblastdb -in /tmp/input.fasta -dbtype nucl -title "custom_db" -out /tmp/custom_db
-                    blastn -query /tmp/input.fasta -db /tmp/custom_db -out /tmp/blast_results.txt -outfmt 6
-                    aws s3 cp /tmp/blast_results.txt s3://{results_bucket}/{job_id}/blast_results.txt --region me-south-1
-                    aws s3 cp /tmp/input.fasta s3://{results_bucket}/{job_id}/input_sequence.fasta --region me-south-1
-                    echo "=== BLAST COMPLETED ==="
-                    """
-                ]
+            job_definition = 'blast-fargate-fixed-v2'
+            command = [
+                "sh", "-c",
+                f"""
+                echo "=== PROCESSING NCBI FETCHED SEQUENCE (BLAST) ==="
+
+                cd /tmp
+
+                # Download fetched sequence
+                aws s3 cp s3://{uploads_bucket}/{s3_key} /tmp/input.fasta --region me-south-1
+
+                # Create BLAST database
+                makeblastdb -in /tmp/input.fasta -dbtype nucl -title "ncbi_db" -out /tmp/ncbi_db
+
+                # Run BLAST analysis
+                blastn -query /tmp/input.fasta -db /tmp/ncbi_db -out /tmp/blast_results.txt -outfmt 6 -evalue 1e-5
+
+                # Create informative report
+                cat > /tmp/blast_report.txt << EOF
+NCBI FETCH ANALYSIS REPORT
+==========================
+Job ID: {job_id}
+Accession ID: {accession_id}
+Fetched From: NCBI (Mock Data)
+Analysis Type: BLASTN
+Status: COMPLETED
+Date: $(date)
+
+SEQUENCE INFORMATION:
+- Accession: {accession_id}
+- Source: NCBI database (mock demonstration)
+- Sequences: $(grep -c '>' /tmp/input.fasta)
+
+BLAST RESULTS:
+- Total hits: $(wc -l < /tmp/blast_results.txt 2>/dev/null || echo 0)
+
+NOTES:
+- This is a demonstration using mock data
+- In production, this would fetch real sequences from NCBI
+- Self-comparison shows perfect matches to the query sequence
+EOF
+
+                # Upload results
+                aws s3 cp /tmp/blast_results.txt s3://{results_bucket}/{job_id}/blast_results.txt --region me-south-1
+                aws s3 cp /tmp/blast_report.txt s3://{results_bucket}/{job_id}/blast_report.txt --region me-south-1
+                aws s3 cp /tmp/input.fasta s3://{results_bucket}/{job_id}/input_sequence.fasta --region me-south-1
+
+                echo "=== NCBI BLAST ANALYSIS COMPLETED ==="
+                """
+            ]
 
             print(f"🔧 Submitting NCBI fetch job to Batch")
             batch_response = batch.submit_job(
-                jobName=f"ncbi-{analysis_type}-{job_id}",
+                jobName=f"ncbi-blast-{job_id}",
                 jobQueue="bioinformatics-queue-working",
                 jobDefinition=job_definition,
                 containerOverrides={
@@ -483,10 +572,11 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA"""
             'status': 'PROCESSING',
             'message': f'NCBI fetch for {accession_id} submitted',
             'accessionId': accession_id,
-            'analysisType': analysis_type,
+            'analysisType': 'blast',
             's3Key': s3_key,
             'batchJobId': batch_response['jobId'],
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.utcnow().isoformat(),
+            'note': 'Using mock NCBI data for demonstration. In production, this would fetch real sequences.'
         }
 
         return {
@@ -507,7 +597,7 @@ AGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA"""
 
 
 def handle_get_job(job_id, base_headers):
-    """Handle job status requests"""
+    """Handle job status requests - PRODUCTION VERSION"""
     try:
         print(f"🔍 Fetching job status for: {job_id}")
 
@@ -520,7 +610,6 @@ def handle_get_job(job_id, base_headers):
 
         dynamodb = boto3.resource('dynamodb')
         batch = boto3.client('batch')
-        # ✅ FIXED: Specify region for S3 client
         s3 = boto3.client('s3', region_name='me-south-1')
         table = dynamodb.Table('BioinformaticsJobs')
 
@@ -532,7 +621,7 @@ def handle_get_job(job_id, base_headers):
             return {
                 'statusCode': 404,
                 'headers': base_headers,
-                'body': json.dumps({'error': 'Job not found'})
+                'body': json.dumps({'error': f'Job not found: {job_id}'})
             }
 
         # Check Batch status if processing
@@ -596,14 +685,37 @@ def handle_get_job(job_id, base_headers):
                         )
                         item['status'] = 'FAILED'
                         item['errorMessage'] = failure_reason
+                    elif batch_job['status'] in ['RUNNING', 'STARTING', 'RUNNABLE']:
+                        # Job is still running, update timestamp
+                        table.update_item(
+                            Key={'jobId': job_id},
+                            UpdateExpression='SET updatedAt = :now',
+                            ExpressionAttributeValues={
+                                ':now': datetime.utcnow().isoformat()
+                            }
+                        )
 
             except Exception as e:
                 print(f"⚠️ Error checking Batch status: {str(e)}")
+                # Don't fail the request if Batch check fails
+
+        # ✅ ADDED: Clean up the response for frontend
+        # Remove sensitive/internal fields
+        response_data = {k: v for k, v in item.items()
+                         if k not in ['s3Key', 'batchJobId', 'resultFiles', 'userId']}
+
+        # Add formatted timestamps
+        if 'createdAt' in item:
+            response_data['createdAt'] = format_timestamp(item['createdAt'])
+        if 'updatedAt' in item:
+            response_data['updatedAt'] = format_timestamp(item['updatedAt'])
+        if 'completionTime' in item:
+            response_data['completionTime'] = format_timestamp(item['completionTime'])
 
         return {
             'statusCode': 200,
             'headers': base_headers,
-            'body': json.dumps(item)
+            'body': json.dumps(response_data)
         }
 
     except Exception as e:
@@ -611,12 +723,12 @@ def handle_get_job(job_id, base_headers):
         return {
             'statusCode': 500,
             'headers': base_headers,
-            'body': json.dumps({'error': 'Internal server error'})
+            'body': json.dumps({'error': f'Error fetching job: {str(e)}'})
         }
 
 
 def handle_download(query_params, base_headers):
-    """Handle file download requests - FIXED VERSION"""
+    """Handle file download requests - PRODUCTION VERSION"""
     try:
         file_key = query_params.get('fileKey')
 
@@ -657,7 +769,7 @@ def handle_download(query_params, base_headers):
             else:
                 raise
 
-        # ✅ FIXED: Generate pre-signed URL
+        # Generate pre-signed URL
         download_url = s3_client.generate_presigned_url(
             'get_object',
             Params={
@@ -667,7 +779,7 @@ def handle_download(query_params, base_headers):
             ExpiresIn=3600
         )
 
-        # ✅ CRITICAL FIX: Ensure region is in the URL
+        # Ensure region is in the URL
         if '.s3.amazonaws.com' in download_url and 'me-south-1' not in download_url:
             download_url = download_url.replace('.s3.amazonaws.com', '.s3.me-south-1.amazonaws.com')
             print(f"🔄 Fixed URL to include region: {download_url}")
@@ -696,7 +808,7 @@ def handle_download(query_params, base_headers):
 
 
 def handle_debug_s3(query_params, base_headers):
-    """Debug endpoint for S3 files"""
+    """Debug endpoint for S3 files - PRODUCTION VERSION"""
     try:
         job_id = query_params.get('jobId')
 
@@ -707,7 +819,6 @@ def handle_debug_s3(query_params, base_headers):
                 'body': json.dumps({'error': 'Job ID required'})
             }
 
-        # ✅ FIXED: Specify region
         s3 = boto3.client('s3', region_name='me-south-1')
         files = find_actual_files_in_s3(job_id, s3)
 
@@ -736,7 +847,7 @@ def handle_debug_s3(query_params, base_headers):
 
 
 def handle_debug_files(query_params, base_headers):
-    """Debug endpoint with file mapping"""
+    """Debug endpoint with file mapping - PRODUCTION VERSION"""
     try:
         job_id = query_params.get('jobId')
 
@@ -747,7 +858,6 @@ def handle_debug_files(query_params, base_headers):
                 'body': json.dumps({'error': 'Job ID required'})
             }
 
-        # ✅ FIXED: Specify region
         s3 = boto3.client('s3', region_name='me-south-1')
         dynamodb = boto3.resource('dynamodb')
 
@@ -810,21 +920,23 @@ def map_files_to_analysis_type(files, analysis_type, job_id):
     available_files = {}
 
     if analysis_type == 'blast':
-        # ✅ FIXED: Map BLAST files with 'txt' for frontend
+        # Map BLAST files
         for file_key in files:
             if file_key.endswith('.txt') and 'blast' in file_key.lower() and 'result' in file_key.lower():
                 available_files['results'] = file_key
-                available_files['txt'] = file_key  # 🎯 CRITICAL: Frontend expects 'txt'
+                available_files['txt'] = file_key
             elif file_key.endswith('.txt') and 'blast' in file_key.lower() and 'report' in file_key.lower():
                 available_files['report'] = file_key
             elif file_key.endswith('.fasta'):
                 available_files['fasta'] = file_key
+            elif file_key.endswith('.html'):
+                available_files['html'] = file_key
 
         # Fallback mapping
         if not available_files:
             available_files = {
                 'results': f"{job_id}/blast_results.txt",
-                'txt': f"{job_id}/blast_results.txt",  # 🎯 CRITICAL: Frontend expects 'txt'
+                'txt': f"{job_id}/blast_results.txt",
                 'report': f"{job_id}/blast_report.txt",
                 'fasta': f"{job_id}/input_sequence.fasta"
             }
@@ -847,3 +959,14 @@ def map_files_to_analysis_type(files, analysis_type, job_id):
             }
 
     return available_files
+
+
+def format_timestamp(timestamp_str):
+    """Format ISO timestamp for frontend display"""
+    try:
+        if not timestamp_str:
+            return timestamp_str
+        dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        return dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+    except:
+        return timestamp_str
