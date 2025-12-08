@@ -1,0 +1,7 @@
+{
+  "httpMethod": "GET",
+  "path": "/download",
+  "queryStringParameters": {
+    "fileKey": "test-manual-upload.txt"
+  }
+}

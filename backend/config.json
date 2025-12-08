@@ -1,0 +1,24 @@
+cat > backend/config.json << EOL
+{
+    "region": "me-south-1",
+    "project": "bioinformatics-platform",
+    "timestamp": "1761318731",
+    "buckets": {
+        "uploads": "bioinformatics-platform-uploads-1761318731",
+        "results": "bioinformatics-platform-results-1761318731"
+    },
+    "dynamodb": {
+        "jobsTable": "BioinformaticsJobs"
+    },
+    "apiGateway": {
+        "apiId": "bs1gcg6hs0",
+        "region": "me-south-1"
+    },
+    "metadata": {
+        "userLocation": "Islamabad, Pakistan",
+        "awsRegion": "me-south-1",
+        "estimatedLatency": "20-40ms",
+        "setupDate": "$(date -Iseconds)"
+    }
+}
+EOL

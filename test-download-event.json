@@ -1,0 +1,10 @@
+{
+  "httpMethod": "GET",
+  "path": "/download",
+  "queryStringParameters": {
+    "fileKey": "results/local-test/summary.json"
+  },
+  "headers": {
+    "Content-Type": "application/json"
+  }
+}
