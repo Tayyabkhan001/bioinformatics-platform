@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'https://bs1gcg6hs0.execute-api.me-south-1.amazonaws.com/prod';
+const API_BASE_URL = process.env.REACT_APP_API_URL ||
+                    'https://bs1gcg6hs0.execute-api.me-south-1.amazonaws.com/prod';
 
 console.log('🔗 API Base URL:', API_BASE_URL);
 
